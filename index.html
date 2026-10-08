@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="data:,">
+<title>Which Marvel Character Are You?</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&display=swap" rel="stylesheet">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: 'Bebas Neue', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: radial-gradient(ellipse at 20% 10%, #3a2752 0%, #1b1530 45%, #0b0a16 100%);
+    color: #fff; display: flex; align-items: center; justify-content: center; padding: 16px;
+  }
+  .card {
+    width: 100%; max-width: 460px; text-align: center;
+    background: rgba(60,55,80,0.55); border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 22px; padding: 34px 26px 28px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+  }
+  h1 { color: #ffd400; font-weight: 400; font-size: 2.1em; letter-spacing: 0.02em; margin: 0 0 8px; line-height: 1.05; }
+  p { margin: 0 0 22px; font-size: 1.15em; letter-spacing: 0.04em; color: #e6e3f0; }
+  input {
+    width: 100%; font: inherit; font-size: 16px; letter-spacing: 0.08em; text-align: center;
+    padding: 13px 16px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.25);
+    background: rgba(0,0,0,0.35); color: #fff; outline: none;
+  }
+  input:focus { border-color: #f39c12; }
+  button {
+    margin-top: 14px; font: inherit; font-size: 1.35em; letter-spacing: 0.04em; color: #fff;
+    border: 0; border-radius: 999px; padding: 12px 38px; cursor: pointer;
+    background: linear-gradient(90deg, #e74c5c, #f39c12);
+  }
+  button:disabled { opacity: 0.6; cursor: default; }
+  .err { color: #ff8a8a; min-height: 1.3em; margin-top: 12px; letter-spacing: 0.05em; }
+  .bar { height: 8px; border-radius: 99px; background: rgba(255,255,255,0.12); overflow: hidden; margin-top: 6px; }
+  .bar div { height: 100%; width: 0; background: linear-gradient(90deg, #e74c5c, #f39c12); transition: width 0.2s; }
+  .loading { display: none; }
+  .is-loading form { display: none; }
+  .is-loading .loading { display: block; }
+  .pct { margin-top: 10px; letter-spacing: 0.08em; color: #cfcfe0; }
+</style>
+</head>
+<body>
+<div class="card" id="card">
+  <h1>Which Marvel Character Are You?</h1>
+  <form id="f" autocomplete="off">
+    <p>Enter the password to play.</p>
+    <input id="pw" type="password" placeholder="Password" autofocus>
+    <button id="go" type="submit">Unlock</button>
+    <div class="err" id="err"></div>
+  </form>
+  <div class="loading">
+    <p>Assembling the Avengers&hellip;</p>
+    <div class="bar"><div id="bar"></div></div>
+    <div class="pct" id="pct">0%</div>
+  </div>
+</div>
+<script>
+// Everything else on this site is encrypted with the password. Nothing is readable
+// until the right password unlocks it here, in the browser.
+const SALT = Uint8Array.from(atob("A4BU5TzqjFYxJBNjzT5fWA=="), c => c.charCodeAt(0));
+const ITER = 250000;
+const KEY_STORE = "marvelQuiz.key";
+const card = document.getElementById("card");
+
+async function deriveKey(pw) {
+  const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pw), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey({ name: "PBKDF2", salt: SALT, iterations: ITER, hash: "SHA-256" },
+    base, { name: "AES-GCM", length: 256 }, true, ["decrypt"]);
+}
+async function open(key, url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("fetch " + url + " " + res.status);
+  const buf = new Uint8Array(await res.arrayBuffer());
+  return crypto.subtle.decrypt({ name: "AES-GCM", iv: buf.slice(0, 12) }, key, buf.slice(12));
+}
+function setPct(p) {
+  document.getElementById("bar").style.width = p + "%";
+  document.getElementById("pct").textContent = p + "%";
+}
+
+async function unlock(key) {
+  // Wrong password fails right here, before anything big downloads.
+  const manifest = JSON.parse(new TextDecoder().decode(await open(key, "meta.bin")));
+  card.classList.add("is-loading");
+  const total = manifest.reduce((s, m) => s + m.size, 0);
+  let done = 0;
+  const urls = {};
+  let next = 0;
+  async function worker() {
+    while (next < manifest.length) {
+      const m = manifest[next++];
+      const bytes = await open(key, m.file);
+      urls[m.path] = URL.createObjectURL(new Blob([bytes], { type: m.mime }));
+      done += m.size;
+      setPct(Math.round(done / total * 100));
+    }
+  }
+  await Promise.all(Array.from({ length: 6 }, worker));
+  let html = new TextDecoder().decode(await open(key, "app.bin"));
+  for (const m of [...manifest].sort((a, b) => b.path.length - a.path.length)) {
+    html = html.split(m.path).join(urls[m.path]);
+  }
+  document.open(); document.write(html); document.close();
+}
+
+async function tryStored() {
+  let raw = null;
+  try { raw = localStorage.getItem(KEY_STORE); } catch (e) {}
+  if (!raw) return;
+  try {
+    const key = await crypto.subtle.importKey("raw", Uint8Array.from(atob(raw), c => c.charCodeAt(0)),
+      "AES-GCM", false, ["decrypt"]);
+    await unlock(key);
+  } catch (e) {
+    try { localStorage.removeItem(KEY_STORE); } catch (e2) {}
+    card.classList.remove("is-loading");
+  }
+}
+
+document.getElementById("f").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const btn = document.getElementById("go"), err = document.getElementById("err");
+  const pw = document.getElementById("pw").value.trim();
+  if (!pw) return;
+  btn.disabled = true; err.textContent = "";
+  let key;
+  try {
+    key = await deriveKey(pw);
+    await open(key, "meta.bin");
+  } catch (e) {
+    err.textContent = "That's not it. Try again.";
+    btn.disabled = false;
+    return;
+  }
+  // Remember this device so the password is only needed once.
+  try {
+    const raw = new Uint8Array(await crypto.subtle.exportKey("raw", key));
+    localStorage.setItem(KEY_STORE, btoa(String.fromCharCode(...raw)));
+  } catch (e) {}
+  try { await unlock(key); }
+  catch (e) {
+    card.classList.remove("is-loading");
+    err.textContent = "Something didn't load. Refresh and try again.";
+    btn.disabled = false;
+  }
+});
+
+tryStored();
+</script>
+</body>
+</html>
